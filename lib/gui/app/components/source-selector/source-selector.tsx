@@ -14,13 +14,15 @@
  * limitations under the License.
  */
 
-import * as sdk from 'etcher-sdk';
+import { faFile, faLink } from '@fortawesome/free-solid-svg-icons';
+import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
+import { sourceDestination } from 'etcher-sdk';
 import * as _ from 'lodash';
 import { GPTPartition, MBRPartition } from 'partitioninfo';
 import * as path from 'path';
 import * as React from 'react';
-import { Modal } from 'rendition';
-import { default as styled } from 'styled-components';
+import { Input, Modal } from 'rendition';
+import styled from 'styled-components';
 
 import * as errors from '../../../../shared/errors';
 import * as messages from '../../../../shared/messages';
@@ -35,12 +37,11 @@ import { replaceWindowsNetworkDriveLetter } from '../../os/windows-network-drive
 import {
 	ChangeButton,
 	DetailsText,
-	Footer,
 	StepButton,
 	StepNameButton,
 	StepSelection,
-	Underline,
 } from '../../styled-components';
+import { colors } from '../../theme';
 import { middleEllipsis } from '../../utils/middle-ellipsis';
 import { SVGIcon } from '../svg-icon/svg-icon';
 
@@ -55,16 +56,6 @@ const ModalText = styled.p`
 	}
 `;
 
-const mainSupportedExtensions = _.intersection(
-	['img', 'iso', 'zip'],
-	supportedFormats.getAllExtensions(),
-);
-
-const extraSupportedExtensions = _.difference(
-	supportedFormats.getAllExtensions(),
-	mainSupportedExtensions,
-).sort();
-
 function getState() {
 	return {
 		hasImage: selectionState.hasImage(),
@@ -73,36 +64,109 @@ function getState() {
 	};
 }
 
-interface ImageSelectorProps {
-	flashing: boolean;
+const URLSelector = ({ done }: { done: (imageURL: string) => void }) => {
+	const [imageURL, setImageURL] = React.useState('');
+	return (
+		<Modal
+			title="Insert the URL of the image you want to flash"
+			done={() => done(imageURL)}
+		>
+			<Input
+				placeholder="Enter a valid URL"
+				type="text"
+				onChange={(evt: React.ChangeEvent<HTMLInputElement>) =>
+					setImageURL(evt.target.value)
+				}
+			/>
+		</Modal>
+	);
+};
+
+interface Flow {
+	icon: any;
+	onClick: (evt: MouseEvent) => void;
+	label: string;
 }
 
-interface ImageSelectorState {
+const FlowSelector = styled(
+	({ flow, ...props }: { flow: Flow; props?: any }) => {
+		return (
+			<StepButton plain onClick={flow.onClick} icon={flow.icon} {...props}>
+				{flow.label}
+			</StepButton>
+		);
+	},
+)`
+	border-radius: 24px;
+
+	:enabled:hover {
+		background-color: ${colors.primary.background};
+		color: ${colors.primary.foreground};
+
+		svg {
+			color: ${colors.primary.foreground}!important;
+		}
+	}
+`;
+
+type Source = typeof sourceDestination.File | typeof sourceDestination.Http;
+
+interface SourceOptions {
+	imagePath: string;
+	SourceType: Source;
+	sourceParams?: any[];
+}
+
+interface SourceSelectorProps {
+	flashing: boolean;
+	afterSelected: (options: SourceOptions) => void;
+}
+
+interface SourceSelectorState {
 	hasImage: boolean;
 	imageName: string;
 	imageSize: number;
 	warning: { message: string; title: string | null } | null;
 	showImageDetails: boolean;
+	showURLSelector: boolean;
 }
 
-export class ImageSelector extends React.Component<
-	ImageSelectorProps,
-	ImageSelectorState
+export class SourceSelector extends React.Component<
+	SourceSelectorProps,
+	SourceSelectorState
 > {
 	private unsubscribe: () => void;
+	private afterSelected: SourceSelectorProps['afterSelected'];
+	public flows: Flow[];
 
-	constructor(props: ImageSelectorProps) {
+	constructor(props: SourceSelectorProps) {
 		super(props);
 		this.state = {
 			...getState(),
 			warning: null,
 			showImageDetails: false,
+			showURLSelector: false,
 		};
 
 		this.openImageSelector = this.openImageSelector.bind(this);
+		this.openURLSelector = this.openURLSelector.bind(this);
 		this.reselectImage = this.reselectImage.bind(this);
 		this.onDrop = this.onDrop.bind(this);
 		this.showSelectedImageDetails = this.showSelectedImageDetails.bind(this);
+		this.afterSelected = props.afterSelected.bind(this);
+
+		this.flows = [
+			{
+				onClick: this.openImageSelector,
+				label: 'Flash from file',
+				icon: <FontAwesomeIcon icon={faFile} />,
+			},
+			{
+				onClick: this.openURLSelector,
+				label: 'Flash from URL',
+				icon: <FontAwesomeIcon icon={faLink} />,
+			},
+		];
 	}
 
 	public componentDidMount() {
@@ -122,11 +186,11 @@ export class ImageSelector extends React.Component<
 			flashingWorkflowUuid: store.getState().toJS().flashingWorkflowUuid,
 		});
 
-		this.openImageSelector();
+		selectionState.deselectImage();
 	}
 
 	private selectImage(
-		image: sdk.sourceDestination.Metadata & {
+		image: sourceDestination.Metadata & {
 			path: string;
 			extension: string;
 			hasMBR: boolean;
@@ -203,7 +267,11 @@ export class ImageSelector extends React.Component<
 		}
 	}
 
-	private async selectImageByPath(imagePath: string) {
+	private async selectImageByPath({
+		imagePath,
+		SourceType,
+		sourceParams,
+	}: SourceOptions) {
 		try {
 			imagePath = await replaceWindowsNetworkDriveLetter(imagePath);
 		} catch (error) {
@@ -220,13 +288,13 @@ export class ImageSelector extends React.Component<
 			return;
 		}
 
-		const source = new sdk.sourceDestination.File(
+		const source = new SourceType(
 			imagePath,
-			sdk.sourceDestination.File.OpenFlags.Read,
+			sourceDestination.File.OpenFlags.Read,
 		);
 		try {
 			const innerSource = await source.getInnerSource();
-			const metadata = (await innerSource.getMetadata()) as sdk.sourceDestination.Metadata & {
+			const metadata = (await innerSource.getMetadata()) as sourceDestination.Metadata & {
 				hasMBR: boolean;
 				partitions: MBRPartition[] | GPTPartition[];
 				path: string;
@@ -242,6 +310,11 @@ export class ImageSelector extends React.Component<
 			metadata.path = imagePath;
 			metadata.extension = path.extname(imagePath).slice(1);
 			this.selectImage(metadata);
+			this.afterSelected({
+				imagePath,
+				SourceType,
+				sourceParams,
+			});
 		} catch (error) {
 			const imageError = errors.createUserError({
 				title: 'Error opening image',
@@ -279,7 +352,11 @@ export class ImageSelector extends React.Component<
 				});
 				return;
 			}
-			this.selectImageByPath(imagePath);
+			this.selectImageByPath({
+				imagePath,
+				SourceType: sourceDestination.File,
+				sourceParams: [sourceDestination.File.OpenFlags.Read],
+			});
 		} catch (error) {
 			exceptionReporter.report(error);
 		}
@@ -288,8 +365,24 @@ export class ImageSelector extends React.Component<
 	private onDrop(event: React.DragEvent<HTMLDivElement>) {
 		const [file] = event.dataTransfer.files;
 		if (file) {
-			this.selectImageByPath(file.path);
+			this.selectImageByPath({
+				imagePath: file.path,
+				SourceType: sourceDestination.File,
+				sourceParams: [sourceDestination.File.OpenFlags.Read],
+			});
 		}
+	}
+
+	private openURLSelector() {
+		analytics.logEvent('Open image URL selector', {
+			applicationSessionUuid:
+				store.getState().toJS().applicationSessionUuid || '',
+			flashingWorkflowUuid: store.getState().toJS().flashingWorkflowUuid,
+		});
+
+		this.setState({
+			showURLSelector: true,
+		});
 	}
 
 	private onDragOver(event: React.DragEvent<HTMLDivElement>) {
@@ -317,7 +410,7 @@ export class ImageSelector extends React.Component<
 	// TODO add a visual change when dragging a file over the selector
 	public render() {
 		const { flashing } = this.props;
-		const { showImageDetails } = this.state;
+		const { showImageDetails, showURLSelector } = this.state;
 
 		const hasImage = selectionState.hasImage();
 
@@ -363,15 +456,9 @@ export class ImageSelector extends React.Component<
 							</>
 						) : (
 							<StepSelection>
-								<StepButton onClick={this.openImageSelector}>
-									Select image
-								</StepButton>
-								<Footer>
-									{mainSupportedExtensions.join(', ')}, and{' '}
-									<Underline tooltip={extraSupportedExtensions.join(', ')}>
-										many more
-									</Underline>
-								</Footer>
+								{_.map(this.flows, flow => {
+									return <FlowSelector key={flow.label} flow={flow} />;
+								})}
 							</StepSelection>
 						)}
 					</div>
@@ -413,6 +500,35 @@ export class ImageSelector extends React.Component<
 					>
 						{selectionState.getImagePath()}
 					</Modal>
+				)}
+
+				{showURLSelector && (
+					<URLSelector
+						done={(imagePath: string) => {
+							// Avoid analytics and selection state changes
+							// if no file was resolved from the dialog.
+							if (!imagePath) {
+								analytics.logEvent('URL selector closed', {
+									applicationSessionUuid: store.getState().toJS()
+										.applicationSessionUuid,
+									flashingWorkflowUuid: store.getState().toJS()
+										.flashingWorkflowUuid,
+								});
+								this.setState({
+									showURLSelector: false,
+								});
+								return;
+							}
+
+							this.selectImageByPath({
+								imagePath,
+								SourceType: sourceDestination.Http,
+							});
+							this.setState({
+								showURLSelector: false,
+							});
+						}}
+					/>
 				)}
 			</>
 		);

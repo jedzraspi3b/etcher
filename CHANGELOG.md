@@ -3,6 +3,14 @@
 All notable changes to this project will be documented in this file.
 This project adheres to [Semantic Versioning](http://semver.org/).
 
+# v1.5.80
+## (2020-02-20)
+
+* Remove unused lint-sass [Lorenzo Alberto Maria Ambrosi]
+* Add generic error's message [Lorenzo Alberto Maria Ambrosi]
+* Refactor buttons style [Lorenzo Alberto Maria Ambrosi]
+* Add flash from url workflow [Lorenzo Alberto Maria Ambrosi]
+
 # v1.5.79
 ## (2020-02-20)
 
